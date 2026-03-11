@@ -1,9 +1,9 @@
 name: Job Hunter
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 */2 * * *" # Запуск каждые 2 часа
+    - cron: '0 */2 * * *'  # Запуск каждые 2 часа (в 0, 2, 4 и т.д.)
+  workflow_dispatch:       # Кнопка для ручного запуска останется
 
 jobs:
   build:
