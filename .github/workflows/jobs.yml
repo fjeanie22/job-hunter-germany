@@ -1,25 +1,32 @@
 name: Job Hunter
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Позволяет запускать вручную
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 * * * *" # Запуск каждый час (лучше не частить, чтобы не забанили)
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Install packages
-        run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          # Установка браузера Chromium и системных библиотек для него
+          python -m playwright install chromium --with-deps
 
       - name: Run script
+        env:
+          # ОБЯЗАТЕЛЬНО: пробрасываем секреты в систему
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python main.py
