@@ -1,14 +1,33 @@
 import requests
 import os
+from parser_indeed import search_indeed
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+def send_message(text):
 
-data = {
-    "chat_id": CHAT_ID,
-    "text": "🚀 Job Hunter работает!"
-}
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-requests.post(url, data=data)
+    data = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+
+    requests.post(url, data=data)
+
+
+jobs = search_indeed("wordpress", "Bayern")
+
+for job in jobs:
+
+    message = f"""
+💻 <b>{job['title']}</b>
+
+🏢 {job['company']}
+
+🔗 {job['link']}
+"""
+
+    send_message(message)
