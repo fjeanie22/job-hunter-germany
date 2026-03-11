@@ -1,15 +1,14 @@
 import requests
+import os
 
-TOKEN = "BOT_TOKEN"
-CHAT_ID = "CHAT_ID"
+TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-message = "🚀 Job Hunter запущен!"
-
-url = f"https://api.telegram.org/bot8693778242:AAG6Hpo0gVF8_3weVcGg3yhg9tn4vLe28LU/sendMessage"
+url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 data = {
     "chat_id": CHAT_ID,
-    "text": message
+    "text": "🚀 Job Hunter работает!"
 }
 
 requests.post(url, data=data)
