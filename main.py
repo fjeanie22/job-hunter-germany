@@ -6,10 +6,21 @@ TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 DB_FILE = "sent_jobs.json"
 
+# Настройки поиска
+# 1. Веб-дизайн (Бавария)
+WEB_KEYWORDS = ["wordpress", "elementor", "html", "css", "webdesign"]
+BAVARIA_CITIES = ["munich", "münchen", "nuremberg", "nürnberg", "augsburg", "regensburg", "ingolstadt", "landshut", "mühldorf", "rosenheim"]
+
+# 2. Офис (Мюльдорф + радиус)
+OFFICE_KEYWORDS = ["sachbearbeiter", "kauffrau", "kaufmann", "sekretär", "büro", "assistant"]
+NEAR_MY_TOWN = ["mühldorf", "altoetting", "altötting", "burghausen", "waldkraiburg", "ampfing", "neumarkt-sankt veit"]
+
 def load_sent_jobs():
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return set(json.load(f))
+        try:
+            with open(DB_FILE, "r") as f:
+                return set(json.load(f))
+        except: return set()
     return set()
 
 def save_sent_jobs(sent_jobs):
@@ -18,54 +29,61 @@ def save_sent_jobs(sent_jobs):
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}
     requests.post(url, json=payload)
 
-def search_jobs():
-    print("Запрос к API Arbeitnow...")
-    # Поиск WordPress вакансий в Германии
-    url = "https://www.arbeitnow.com/api/job-board-api"
-    params = {"search": "wordpress", "location": "germany"}
+def is_relevant(job):
+    title = job.get("title", "").lower()
+    location = job.get("location", "").lower()
     
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json().get("data", [])
-    except Exception as e:
-        print(f"Ошибка API: {e}")
-        return []
+    # Проверка Категории 1: Web + Бавария
+    is_web = any(word in title for word in WEB_KEYWORDS)
+    in_bavaria = any(city in location for city in BAVARIA_CITIES)
+    if is_web and in_bavaria:
+        return True, "🌐 Web & Design"
+
+    # Проверка Категории 2: Офис + Мюльдорф и окрестности
+    is_office = any(word in title for word in OFFICE_KEYWORDS)
+    is_near = any(city in location for city in NEAR_MY_TOWN)
+    if is_office and is_near:
+        return True, "🏢 Office & Admin"
+        
+    return False, None
 
 def main():
     sent_jobs = load_sent_jobs()
-    jobs = search_jobs()
+    url = "https://www.arbeitnow.com/api/job-board-api"
     
-    new_jobs_found = 0
-    for job in jobs[:10]: # Проверяем последние 10 вакансий
-        job_id = job.get("slug") # Уникальный ID вакансии
-        
-        if job_id not in sent_jobs:
-            title = job.get("title")
-            company = job.get("company_name")
-            url = job.get("url")
-            location = job.get("location")
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        all_jobs = response.json().get("data", [])
+    except Exception as e:
+        print(f"Ошибка API: {e}")
+        return
+
+    new_jobs_count = 0
+    for job in all_jobs:
+        job_id = job.get("slug")
+        if job_id in sent_jobs:
+            continue
             
+        relevant, category = is_relevant(job)
+        if relevant:
             msg = (
-                f"🆕 <b>Новая вакансия!</b>\n"
-                f"📝 {title}\n"
-                f"🏢 {company}\n"
-                f"📍 {location}\n\n"
-                f"🔗 <a href='{url}'>Откликнуться</a>"
+                f"✨ <b>{category}</b>\n"
+                f"📝 <b>{job.get('title')}</b>\n"
+                f"🏢 {job.get('company_name')}\n"
+                f"📍 {job.get('location')}\n\n"
+                f"🔗 <a href='{job.get('url')}'>Открыть вакансию</a>"
             )
-            
             send_telegram(msg)
             sent_jobs.add(job_id)
-            new_jobs_found += 1
-    
-    if new_jobs_found > 0:
-        save_sent_jobs(sent_jobs)
-        print(f"Отправлено новых вакансий: {new_jobs_found}")
-    else:
-        print("Новых вакансий пока нет.")
+            new_jobs_count += 1
+            if new_jobs_count >= 10: break # Не больше 10 за раз
+
+    save_sent_jobs(sent_jobs)
+    print(f"Найдено подходящих: {new_jobs_count}")
 
 if __name__ == "__main__":
     main()
