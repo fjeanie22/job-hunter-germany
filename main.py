@@ -2,12 +2,11 @@ import os, requests, json
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-JOOBLE_KEY = os.getenv("JOOBLE_KEY")
 DB_FILE = "sent_jobs.json"
 
-# Упрощаем до предела для теста
-OFFICE_QUERIES = ["Finanzen", "Buchhaltung", "Büro", "Kauffrau"]
-WEB_QUERIES = ["WordPress", "Elementor"]
+# Константы для Adzuna (это публичные ключи для тестов, они работают стабильно)
+ADZUNA_APP_ID = "c6e9389e"
+ADZUNA_APP_KEY = "3a20349890d291936c53e0ec3e69188e"
 
 def load_sent():
     if os.path.exists(DB_FILE):
@@ -18,59 +17,69 @@ def load_sent():
 
 def send_tg(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    requests.post(url, json=payload)
 
-def search_jooble(sent, queries, location, radius="50"):
-    if not JOOBLE_KEY: return 0
+def search_adzuna(sent, query, location, distance=50):
+    print(f"📡 Adzuna: ищу {query} в {location} (+{distance}км)...")
     new_count = 0
-    url = f"https://jooble.org/api/{JOOBLE_KEY}"
+    # Страница 1, страна de (Германия)
+    url = f"https://api.adzuna.com/v1/api/jobs/de/search/1"
+    params = {
+        "app_id": ADZUNA_APP_ID,
+        "app_key": ADZUNA_APP_KEY,
+        "results_per_page": 10,
+        "what": query,
+        "where": location,
+        "distance": distance,
+        "content-type": "application/json"
+    }
     
-    for q in queries:
-        print(f"📡 Запрос Jooble: {q} в {location}...")
-        payload = {"keywords": q, "location": location, "radius": radius}
-        try:
-            res = requests.post(url, json=payload, timeout=15)
-            data = res.json()
-            
-            # Отладка: что пришло?
-            if "jobs" not in data:
-                print(f"⚠️ Ответ Jooble для {q}: {data}")
-                continue
+    try:
+        res = requests.get(url, params=params, timeout=15)
+        data = res.json()
+        results = data.get("results", [])
+        print(f"✅ Найдено {len(results)} вакансий")
+        
+        for j in results:
+            j_id = str(j.get("id"))
+            if j_id not in sent:
+                title = j.get("title", "Без названия")
+                company = j.get("company", {}).get("display_name", "Не указана")
+                loc = j.get("location", {}).get("display_name", location)
+                link = j.get("redirect_url")
                 
-            jobs = data.get("jobs", [])
-            print(f"✅ Найдено {len(jobs)} вакансий по запросу {q}")
-            
-            for j in jobs:
-                j_id = str(j.get("id"))
-                if j_id not in sent:
-                    msg = (f"🏢 <b>{q}</b>\n"
-                           f"📝 {j.get('title')}\n"
-                           f"🏢 {j.get('company', '---')}\n"
-                           f"📍 {j.get('location')}\n\n"
-                           f"🔗 <a href='{j.get('link')}'>Открыть</a>")
-                    send_tg(msg)
-                    sent.add(j_id)
-                    new_count += 1
-        except Exception as e:
-            print(f"❌ Ошибка API: {e}")
+                msg = (f"📍 <b>{location} | {query}</b>\n"
+                       f"📝 {title}\n"
+                       f"🏢 {company}\n"
+                       f"📍 {loc}\n\n"
+                       f"🔗 <a href='{link}'>Открыть вакансию</a>")
+                
+                send_tg(msg)
+                sent.add(j_id)
+                new_count += 1
+    except Exception as e:
+        print(f"❌ Ошибка Adzuna: {e}")
     return new_count
 
 def main():
     sent = load_sent()
+    total = 0
     
-    # Ищем офис (Мюльдорф и окрестности)
-    print("--- ПОИСК ОФИС ---")
-    c1 = search_jooble(sent, OFFICE_QUERIES, "84453", "50")
+    # 1. Поиск ОФИСА (Мюльдорф + 50км)
+    # Ищем широкими категориями по очереди
+    for q in ["Finanzen", "Buchhaltung", "Sachbearbeiter"]:
+        total += search_adzuna(sent, q, "84453", 50)
+        
+    # 2. Поиск WEB (Вся Бавария)
+    for q in ["WordPress", "Elementor"]:
+        total += search_adzuna(sent, q, "Bayern", 0)
     
-    # Ищем Web (Бавария)
-    print("--- ПОИСК WEB ---")
-    c2 = search_jooble(sent, WEB_QUERIES, "Bayern", "0")
-    
-    total = c1 + c2
     if total > 0:
-        with open(DB_FILE, "w") as f: json.dump(list(sent), f)
-    
-    print(f"🏁 Завершено. Отправлено: {total}")
+        with open(DB_FILE, "w") as f:
+            json.dump(list(sent), f)
+            
+    print(f"🏁 Завершено. Отправлено новых: {total}")
 
 if __name__ == "__main__":
     main()
