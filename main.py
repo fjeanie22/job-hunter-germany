@@ -1,100 +1,76 @@
-import os
-import requests
-import json
+import os, requests, json
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-JOOBLE_KEY = os.getenv("JOOBLE_KEY") # Получи на jooble.org/api-key
+JOOBLE_KEY = os.getenv("JOOBLE_KEY")
 DB_FILE = "sent_jobs.json"
 
 # Ключевые слова
-WEB_KEYWORDS = ["wordpress", "elementor", "webdesign", "website", "frontend", "дизайн", "cms"]
-OFFICE_KEYWORDS = ["sachbearbeiter", "kauffrau", "kaufmann", "büro", "sekretär", "empfang", "assistenz", "office"]
+WEB_KW = ["wordpress", "elementor", "webdesign", "frontend", "html", "css"]
+OFFICE_KW = ["sachbearbeiter", "kauffrau", "büro", "sekretär", "assistenz", "office"]
 
-def load_sent_jobs():
+def load_sent():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r") as f: return set(json.load(f))
         except: return set()
     return set()
 
-def save_sent_jobs(sent_jobs):
-    with open(DB_FILE, "w") as f: json.dump(list(sent_jobs), f)
-
-def send_telegram(text):
+def send_tg(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
 
-def get_ba_token():
-    # Улучшенный метод получения токена BA
-    url = "https://rest.arbeitsagentur.de/oauth/get_token_clientid"
-    headers = {
-        "X-API-Key": "jobboerse-api-key",
-        "User-Agent": "Mozilla/5.0"
-    }
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        return res.json().get("access_token")
-    except: return None
-
-def search_jooble():
-    if not JOOBLE_KEY: return []
-    print("Проверка Jooble...")
-    jobs = []
+def search_jooble(sent):
+    if not JOOBLE_KEY:
+        print("❌ JOOBLE_KEY не найден в env")
+        return 0
+    print("🔍 Проверка Jooble (Мюльдорф + 25км)...")
+    count = 0
     url = f"https://jooble.org/api/{JOOBLE_KEY}"
+    # Собираем ключевые слова для поиска
+    query = " ".join(OFFICE_KW)
+    payload = {"keywords": query, "location": "84453", "radius": "25"}
     
-    # Ищем офис в Мюльдорфе (84453)
-    payload = {"keywords": "sachbearbeiter kauffrau", "location": "84453", "radius": "25"}
     try:
         res = requests.post(url, json=payload, timeout=10)
-        for j in res.json().get("jobs", []):
-            jobs.append({
-                "id": str(j.get("id")),
-                "title": j.get("title"),
-                "company": j.get("company"),
-                "location": j.get("location"),
-                "url": j.get("link"),
-                "cat": "🔍 Jooble Office"
-            })
-    except: pass
-    return jobs
+        jobs = res.json().get("jobs", [])
+        print(f"✅ Jooble нашел всего: {len(jobs)}")
+        for j in jobs:
+            j_id = str(j.get("id"))
+            if j_id not in sent:
+                msg = f"🔍 <b>Jooble Office</b>\n📝 {j.get('title')}\n🏢 {j.get('company')}\n📍 {j.get('location')}\n\n🔗 <a href='{j.get('link')}'>Открыть</a>"
+                send_tg(msg)
+                sent.add(j_id)
+                count += 1
+    except Exception as e: print(f"❌ Ошибка Jooble: {e}")
+    return count
 
-def main():
-    sent_jobs = load_sent_jobs()
-    new_jobs_found = 0
-    
-    # 1. Jooble (Самый надежный для Мюльдорфа)
-    for j in search_jooble():
-        if j["id"] not in sent_jobs:
-            msg = (f"✨ <b>{j['cat']}</b>\n"
-                   f"📝 {j['title']}\n"
-                   f"🏢 {j.get('company', '---')}\n"
-                   f"📍 {j['location']}\n\n"
-                   f"🔗 <a href='{j['url']}'>Открыть</a>")
-            send_telegram(msg)
-            sent_jobs.add(j["id"])
-            new_jobs_found += 1
-
-    # 2. Arbeitnow (Web)
-    print("Проверка Arbeitnow...")
+def search_arbeitnow(sent):
+    print("🔍 Проверка Arbeitnow (Web)...")
+    count = 0
     try:
         res = requests.get("https://www.arbeitnow.com/api/job-board-api", timeout=10)
-        for j in res.json().get("data", []):
-            job_id = j.get("slug")
-            title_lower = j.get("title", "").lower()
-            if job_id not in sent_jobs and any(k in title_lower for k in WEB_KEYWORDS):
-                msg = (f"✨ <b>🌐 Web Design</b>\n"
-                       f"📝 {j.get('title')}\n"
-                       f"🏢 {j.get('company_name')}\n\n"
-                       f"🔗 <a href='{j.get('url')}'>Открыть</a>")
-                send_telegram(msg)
-                sent_jobs.add(job_id)
-                new_jobs_found += 1
-    except: pass
+        jobs = res.json().get("data", [])
+        for j in jobs:
+            j_id = j.get("slug")
+            title = j.get("title", "").lower()
+            if j_id not in sent and any(k in title for k in WEB_KW):
+                msg = f"🌐 <b>Web Design</b>\n📝 {j.get('title')}\n🏢 {j.get('company_name')}\n📍 {j.get('location')}\n\n🔗 <a href='{j.get('url')}'>Открыть</a>"
+                send_tg(msg)
+                sent.add(j_id)
+                count += 1
+    except Exception as e: print(f"❌ Ошибка Arbeitnow: {e}")
+    return count
 
-    if new_jobs_found > 0:
-        save_sent_jobs(sent_jobs)
-    print(f"Итог: отправлено {new_jobs_found}")
+def main():
+    sent = load_sent()
+    found_jooble = search_jooble(sent)
+    found_web = search_arbeitnow(sent)
+    
+    total = found_jooble + found_web
+    if total > 0:
+        with open(DB_FILE, "w") as f: json.dump(list(sent), f)
+    print(f"🏁 Итог: отправлено {total} новых вакансий")
 
 if __name__ == "__main__":
     main()
