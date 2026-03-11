@@ -7,12 +7,10 @@ CHAT_ID = os.getenv("CHAT_ID")
 DB_FILE = "sent_jobs.json"
 
 # --- НАСТРОЙКИ ---
-# Веб-дизайн (ключевые слова)
-WEB_KEYWORDS = ["wordpress", "elementor", "html", "css", "webdesign"]
-# Офис (ключевые слова)
-OFFICE_KEYWORDS = ["sachbearbeiter", "kauffrau", "kaufmann", "büro", "sekretär"]
-MY_ZIP = "84453" # Мюльдорф
-RADIUS = 50      # Радиус в км
+WEB_KEYWORDS = ["wordpress", "elementor", "html", "css", "webdesign", "website", "frontend"]
+OFFICE_KEYWORDS = ["sachbearbeiter", "kauffrau", "kaufmann", "büro", "sekretär", "empfang", "verwaltung", "assistenz"]
+MY_ZIP = "84453"
+RADIUS = 50 
 
 def load_sent_jobs():
     if os.path.exists(DB_FILE):
@@ -29,56 +27,73 @@ def save_sent_jobs(sent_jobs):
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
-    requests.post(url, json=payload)
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Ошибка отправки в TG: {e}")
+
+def get_ba_token():
+    """Получаем временный токен для доступа к API Arbeitsagentur"""
+    url = "https://rest.arbeitsagentur.de/oauth/get_token_clientid"
+    headers = {"X-API-Key": "jobboerse-api-key"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        return res.json().get("access_token")
+    except:
+        return None
 
 def search_arbeitnow():
-    """Поиск на Arbeitnow (Web)"""
+    print("Проверка Arbeitnow...")
     url = "https://www.arbeitnow.com/api/job-board-api"
     try:
-        res = requests.get(url)
-        return res.json().get("data", [])
+        res = requests.get(url, timeout=10)
+        data = res.json().get("data", [])
+        print(f"Arbeitnow вернул {len(data)} вакансий")
+        return data
     except: return []
 
 def search_arbeitsagentur():
-    """Поиск на Arbeitsagentur (Office)"""
-    # Используем их публичный API для поиска
-    # Мы ищем по ключевым словам из OFFICE_KEYWORDS в твоем регионе
+    print("Проверка Arbeitsagentur...")
+    token = get_ba_token()
+    if not token:
+        print("Не удалось получить токен BA")
+        return []
+    
     jobs = []
     base_url = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs"
+    headers = {"Authorization": f"Bearer {token}"}
     
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "X-API-Key": "jobboerse-api-key" # Это публичный ключ
+    # Ищем по всем офисным словам сразу через запятую
+    params = {
+        "was": ",".join(OFFICE_KEYWORDS),
+        "wo": MY_ZIP,
+        "umkreis": RADIUS,
+        "size": 20
     }
-    
-    for kw in OFFICE_KEYWORDS:
-        params = {
-            "was": kw,
-            "wo": MY_ZIP,
-            "umkreis": RADIUS,
-            "size": 10
-        }
-        try:
-            res = requests.get(base_url, params=params, headers=headers)
-            if res.status_code == 200:
-                data = res.json()
-                for j in data.get("stellenangebote", []):
-                    jobs.append({
-                        "id": j.get("hashId"),
-                        "title": j.get("titel"),
-                        "company": j.get("arbeitgeber"),
-                        "location": j.get("arbeitsort", {}).get("ort"),
-                        "url": f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{j.get('hashId')}",
-                        "cat": "🏢 Office (BA)"
-                    })
-        except: continue
+    try:
+        res = requests.get(base_url, params=params, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            items = data.get("stellenangebote", [])
+            print(f"BA нашел {len(items)} вакансий в радиусе {RADIUS}км")
+            for j in items:
+                jobs.append({
+                    "id": j.get("hashId"),
+                    "title": j.get("titel"),
+                    "company": j.get("arbeitgeber"),
+                    "location": j.get("arbeitsort", {}).get("ort"),
+                    "url": f"https://www.arbeitsagentur.de/jobboerse/jobdetail/{j.get('hashId')}",
+                    "cat": "🏢 Office (BA)"
+                })
+    except Exception as e:
+        print(f"Ошибка поиска BA: {e}")
     return jobs
 
 def main():
     sent_jobs = load_sent_jobs()
     new_jobs_found = 0
     
-    # 1. Проверяем Arbeitnow
+    # 1. Arbeitnow
     for j in search_arbeitnow():
         job_id = j.get("slug")
         title = j.get("title", "").lower()
@@ -92,7 +107,7 @@ def main():
             sent_jobs.add(job_id)
             new_jobs_found += 1
 
-    # 2. Проверяем Arbeitsagentur
+    # 2. Arbeitsagentur
     for j in search_arbeitsagentur():
         job_id = j.get("id")
         if job_id and job_id not in sent_jobs:
@@ -107,7 +122,8 @@ def main():
 
     if new_jobs_found > 0:
         save_sent_jobs(sent_jobs)
-    print(f"Готово. Найдено новых: {new_jobs_found}")
+    
+    print(f"Итог: отправлено {new_jobs_found} новых вакансий")
 
 if __name__ == "__main__":
     main()
