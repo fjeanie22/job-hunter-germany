@@ -24,6 +24,7 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOOBLE_KEY: ${{ secrets.JOOBLE_KEY }}
         run: python main.py
 
       - name: Commit and push if changed
