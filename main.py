@@ -2,11 +2,17 @@ import os, requests, json
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+JOOBLE_KEY = os.getenv("JOOBLE_KEY")
 DB_FILE = "sent_jobs.json"
 
-# Константы для Adzuna (это публичные ключи для тестов, они работают стабильно)
-ADZUNA_APP_ID = "c6e9389e"
-ADZUNA_APP_KEY = "3a20349890d291936c53e0ec3e69188e"
+# Ключи Adzuna (публичные)
+ADZ_ID = "c6e9389e"
+ADZ_KEY = "3a20349890d291936c53e0ec3e69188e"
+
+# Настройки
+LOC_OFFICE = "84453"
+LOC_WEB = "Bayern"
+RADIUS = "100"
 
 def load_sent():
     if os.path.exists(DB_FILE):
@@ -17,69 +23,68 @@ def load_sent():
 
 def send_tg(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
-    requests.post(url, json=payload)
+    requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
 
-def search_adzuna(sent, query, location, distance=50):
-    print(f"📡 Adzuna: ищу {query} в {location} (+{distance}км)...")
-    new_count = 0
-    # Страница 1, страна de (Германия)
+def search_adzuna(sent, query, loc, dist):
+    print(f"📡 Adzuna: {query}...")
     url = f"https://api.adzuna.com/v1/api/jobs/de/search/1"
-    params = {
-        "app_id": ADZUNA_APP_ID,
-        "app_key": ADZUNA_APP_KEY,
-        "results_per_page": 10,
-        "what": query,
-        "where": location,
-        "distance": distance,
-        "content-type": "application/json"
-    }
-    
+    params = {"app_id": ADZ_ID, "app_key": ADZ_KEY, "results_per_page": 5, "what": query, "where": loc, "distance": dist}
     try:
-        res = requests.get(url, params=params, timeout=15)
-        data = res.json()
-        results = data.get("results", [])
-        print(f"✅ Найдено {len(results)} вакансий")
-        
-        for j in results:
-            j_id = str(j.get("id"))
+        res = requests.get(url, params=params, timeout=10).json()
+        for j in res.get("results", []):
+            j_id = f"adz-{j.get('id')}"
             if j_id not in sent:
-                title = j.get("title", "Без названия")
-                company = j.get("company", {}).get("display_name", "Не указана")
-                loc = j.get("location", {}).get("display_name", location)
-                link = j.get("redirect_url")
-                
-                msg = (f"📍 <b>{location} | {query}</b>\n"
-                       f"📝 {title}\n"
-                       f"🏢 {company}\n"
-                       f"📍 {loc}\n\n"
-                       f"🔗 <a href='{link}'>Открыть вакансию</a>")
-                
+                msg = f"📌 <b>Adzuna: {query}</b>\n📝 {j.get('title')}\n🏢 {j.get('company', {}).get('display_name')}\n📍 {j.get('location', {}).get('display_name')}\n🔗 <a href='{j.get('redirect_url')}'>Link</a>"
                 send_tg(msg)
                 sent.add(j_id)
-                new_count += 1
-    except Exception as e:
-        print(f"❌ Ошибка Adzuna: {e}")
-    return new_count
+    except: pass
+
+def search_jooble(sent, query, loc, dist):
+    if not JOOBLE_KEY: return
+    print(f"📡 Jooble: {query}...")
+    url = f"https://jooble.org/api/{JOOBLE_KEY}"
+    try:
+        res = requests.post(url, json={"keywords": query, "location": loc, "radius": dist}, timeout=10).json()
+        for j in res.get("jobs", []):
+            j_id = f"jo-{j.get('id')}"
+            if j_id not in sent:
+                msg = f"💼 <b>Jooble: {query}</b>\n📝 {j.get('title')}\n🏢 {j.get('company')}\n📍 {j.get('location')}\n🔗 <a href='{j.get('link')}'>Link</a>"
+                send_tg(msg)
+                sent.add(j_id)
+    except: pass
+
+def search_arbeitnow(sent):
+    print("📡 Arbeitnow...")
+    try:
+        res = requests.get("https://www.arbeitnow.com/api/job-board-api", timeout=10).json()
+        for j in res.get("data", []):
+            title = j.get("title", "").lower()
+            if "wordpress" in title or "elementor" in title:
+                j_id = f"an-{j.get('slug')}"
+                if j_id not in sent:
+                    msg = f"🌐 <b>Arbeitnow Web</b>\n📝 {j.get('title')}\n🏢 {j.get('company_name')}\n🔗 <a href='{j.get('url')}'>Link</a>"
+                    send_tg(msg)
+                    sent.add(j_id)
+    except: pass
 
 def main():
     sent = load_sent()
-    total = 0
     
-    # 1. Поиск ОФИСА (Мюльдорф + 50км)
-    # Ищем широкими категориями по очереди
-    for q in ["Finanzen", "Buchhaltung", "Sachbearbeiter"]:
-        total += search_adzuna(sent, q, "84453", 50)
-        
-    # 2. Поиск WEB (Вся Бавария)
-    for q in ["WordPress", "Elementor"]:
-        total += search_adzuna(sent, q, "Bayern", 0)
+    # Ищем WordPress по всей Баварии
+    for q in ["wordpress", "elementor"]:
+        search_adzuna(sent, q, LOC_WEB, "0")
+        search_jooble(sent, q, LOC_WEB, "0")
     
-    if total > 0:
-        with open(DB_FILE, "w") as f:
-            json.dump(list(sent), f)
-            
-    print(f"🏁 Завершено. Отправлено новых: {total}")
+    # Ищем Офис в радиусе 100км
+    search_adzuna(sent, "Sachbearbeiter", LOC_OFFICE, RADIUS)
+    search_jooble(sent, "Sachbearbeiter", LOC_OFFICE, RADIUS)
+    
+    # Глобальный IT-поиск
+    search_arbeitnow(sent)
+    
+    with open(DB_FILE, "w") as f:
+        json.dump(list(sent), f)
+    print("🏁 Проверка завершена.")
 
 if __name__ == "__main__":
     main()
