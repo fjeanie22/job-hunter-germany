@@ -6,14 +6,13 @@ TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 DB_FILE = "sent_jobs.json"
 
-# Настройки поиска
-# 1. Веб-дизайн (Бавария)
+# --- НАСТРОЙКИ ---
+# Веб-дизайн (ключевые слова)
 WEB_KEYWORDS = ["wordpress", "elementor", "html", "css", "webdesign"]
-BAVARIA_CITIES = ["munich", "münchen", "nuremberg", "nürnberg", "augsburg", "regensburg", "ingolstadt", "landshut", "mühldorf", "rosenheim"]
-
-# 2. Офис (Мюльдорф + радиус)
-OFFICE_KEYWORDS = ["sachbearbeiter", "kauffrau", "kaufmann", "sekretär", "büro", "assistant"]
-NEAR_MY_TOWN = ["mühldorf", "altoetting", "altötting", "burghausen", "waldkraiburg", "ampfing", "neumarkt-sankt veit"]
+# Офис (ключевые слова)
+OFFICE_KEYWORDS = ["sachbearbeiter", "kauffrau", "kaufmann", "büro", "sekretär"]
+MY_ZIP = "84453" # Мюльдорф
+RADIUS = 50      # Радиус в км
 
 def load_sent_jobs():
     if os.path.exists(DB_FILE):
@@ -29,61 +28,86 @@ def save_sent_jobs(sent_jobs):
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
     requests.post(url, json=payload)
 
-def is_relevant(job):
-    title = job.get("title", "").lower()
-    location = job.get("location", "").lower()
-    
-    # Проверка Категории 1: Web + Бавария
-    is_web = any(word in title for word in WEB_KEYWORDS)
-    in_bavaria = any(city in location for city in BAVARIA_CITIES)
-    if is_web and in_bavaria:
-        return True, "🌐 Web & Design"
+def search_arbeitnow():
+    """Поиск на Arbeitnow (Web)"""
+    url = "https://www.arbeitnow.com/api/job-board-api"
+    try:
+        res = requests.get(url)
+        return res.json().get("data", [])
+    except: return []
 
-    # Проверка Категории 2: Офис + Мюльдорф и окрестности
-    is_office = any(word in title for word in OFFICE_KEYWORDS)
-    is_near = any(city in location for city in NEAR_MY_TOWN)
-    if is_office and is_near:
-        return True, "🏢 Office & Admin"
-        
-    return False, None
+def search_arbeitsagentur():
+    """Поиск на Arbeitsagentur (Office)"""
+    # Используем их публичный API для поиска
+    # Мы ищем по ключевым словам из OFFICE_KEYWORDS в твоем регионе
+    jobs = []
+    base_url = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "X-API-Key": "jobboerse-api-key" # Это публичный ключ
+    }
+    
+    for kw in OFFICE_KEYWORDS:
+        params = {
+            "was": kw,
+            "wo": MY_ZIP,
+            "umkreis": RADIUS,
+            "size": 10
+        }
+        try:
+            res = requests.get(base_url, params=params, headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                for j in data.get("stellenangebote", []):
+                    jobs.append({
+                        "id": j.get("hashId"),
+                        "title": j.get("titel"),
+                        "company": j.get("arbeitgeber"),
+                        "location": j.get("arbeitsort", {}).get("ort"),
+                        "url": f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{j.get('hashId')}",
+                        "cat": "🏢 Office (BA)"
+                    })
+        except: continue
+    return jobs
 
 def main():
     sent_jobs = load_sent_jobs()
-    url = "https://www.arbeitnow.com/api/job-board-api"
+    new_jobs_found = 0
     
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        all_jobs = response.json().get("data", [])
-    except Exception as e:
-        print(f"Ошибка API: {e}")
-        return
-
-    new_jobs_count = 0
-    for job in all_jobs:
-        job_id = job.get("slug")
-        if job_id in sent_jobs:
-            continue
-            
-        relevant, category = is_relevant(job)
-        if relevant:
-            msg = (
-                f"✨ <b>{category}</b>\n"
-                f"📝 <b>{job.get('title')}</b>\n"
-                f"🏢 {job.get('company_name')}\n"
-                f"📍 {job.get('location')}\n\n"
-                f"🔗 <a href='{job.get('url')}'>Открыть вакансию</a>"
-            )
+    # 1. Проверяем Arbeitnow
+    for j in search_arbeitnow():
+        job_id = j.get("slug")
+        title = j.get("title", "").lower()
+        if job_id not in sent_jobs and any(k in title for k in WEB_KEYWORDS):
+            msg = (f"✨ <b>🌐 Web Design</b>\n"
+                   f"📝 {j.get('title')}\n"
+                   f"🏢 {j.get('company_name')}\n"
+                   f"📍 {j.get('location')}\n\n"
+                   f"🔗 <a href='{j.get('url')}'>Открыть</a>")
             send_telegram(msg)
             sent_jobs.add(job_id)
-            new_jobs_count += 1
-            if new_jobs_count >= 10: break # Не больше 10 за раз
+            new_jobs_found += 1
 
-    save_sent_jobs(sent_jobs)
-    print(f"Найдено подходящих: {new_jobs_count}")
+    # 2. Проверяем Arbeitsagentur
+    for j in search_arbeitsagentur():
+        job_id = j.get("id")
+        if job_id and job_id not in sent_jobs:
+            msg = (f"✨ <b>{j['cat']}</b>\n"
+                   f"📝 {j['title']}\n"
+                   f"🏢 {j['company']}\n"
+                   f"📍 {j['location']}\n\n"
+                   f"🔗 <a href='{j['url']}'>Открыть</a>")
+            send_telegram(msg)
+            sent_jobs.add(job_id)
+            new_jobs_found += 1
+
+    if new_jobs_found > 0:
+        save_sent_jobs(sent_jobs)
+    print(f"Готово. Найдено новых: {new_jobs_found}")
 
 if __name__ == "__main__":
     main()
