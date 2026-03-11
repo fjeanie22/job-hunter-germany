@@ -1,53 +1,71 @@
-async def search_indeed():
-    jobs = []
-    async with async_playwright() as p:
-        # Запускаем браузер с расширенными настройками
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        page = await context.new_page()
+import os
+import requests
+import json
+
+TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+DB_FILE = "sent_jobs.json"
+
+def load_sent_jobs():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def save_sent_jobs(sent_jobs):
+    with open(DB_FILE, "w") as f:
+        json.dump(list(sent_jobs), f)
+
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    requests.post(url, json=payload)
+
+def search_jobs():
+    print("Запрос к API Arbeitnow...")
+    # Поиск WordPress вакансий в Германии
+    url = "https://www.arbeitnow.com/api/job-board-api"
+    params = {"search": "wordpress", "location": "germany"}
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json().get("data", [])
+    except Exception as e:
+        print(f"Ошибка API: {e}")
+        return []
+
+def main():
+    sent_jobs = load_sent_jobs()
+    jobs = search_jobs()
+    
+    new_jobs_found = 0
+    for job in jobs[:10]: # Проверяем последние 10 вакансий
+        job_id = job.get("slug") # Уникальный ID вакансии
         
-        # Переходим сначала на главную, чтобы "набить" куки
-        await page.goto("https://de.indeed.com/", wait_until="networkidle")
-        await asyncio.sleep(2) 
-        
-        url = "https://de.indeed.com/jobs?q=wordpress&l=Bayern&sort=date"
-        print(f"Перехожу к поиску: {url}")
-        
-        try:
-            await page.goto(url, wait_until="networkidle")
-            # Ждем чуть дольше
-            await asyncio.sleep(5) 
+        if job_id not in sent_jobs:
+            title = job.get("title")
+            company = job.get("company_name")
+            url = job.get("url")
+            location = job.get("location")
             
-            # Проверяем, нет ли на странице слова "Captcha" или "Forbidden"
-            content = await page.content()
-            if "hCaptcha" in content or "Access Denied" in content:
-                print("Упс! Нас засекли (капча или блок).")
-                return []
+            msg = (
+                f"🆕 <b>Новая вакансия!</b>\n"
+                f"📝 {title}\n"
+                f"🏢 {company}\n"
+                f"📍 {location}\n\n"
+                f"🔗 <a href='{url}'>Откликнуться</a>"
+            )
+            
+            send_telegram(msg)
+            sent_jobs.add(job_id)
+            new_jobs_found += 1
+    
+    if new_jobs_found > 0:
+        save_sent_jobs(sent_jobs)
+        print(f"Отправлено новых вакансий: {new_jobs_found}")
+    else:
+        print("Новых вакансий пока нет.")
 
-            cards = await page.query_selector_all(".job_seen_beacon")
-            # Если классический селектор не сработал, попробуем альтернативный
-            if not cards:
-                cards = await page.query_selector_all("li .cardOutline")
-
-            print(f"Найдено карточек: {len(cards)}")
-
-            for card in cards[:5]:
-                # Внутренние селекторы Indeed часто меняются
-                title_el = await card.query_selector("h2.jobTitle span")
-                company_el = await card.query_selector("[data-testid='company-name']")
-                link_el = await card.query_selector("h2.jobTitle a")
-                
-                if title_el and link_el:
-                    title = await title_el.inner_text()
-                    company = await company_el.inner_text() if company_el else "Unknown"
-                    href = await link_el.get_attribute("href")
-                    link = f"https://de.indeed.com{href}"
-                    jobs.append({"title": title, "company": company, "link": link})
-        except Exception as e:
-            print(f"Ошибка: {e}")
-        
-        await browser.close()
-    return jobs
+if __name__ == "__main__":
+    main()
