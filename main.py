@@ -1,9 +1,13 @@
 import os, requests, json
-from bs4 import BeautifulSoup # Нам понадобится эта библиотека
+from bs4 import BeautifulSoup
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+JOOBLE_KEY = os.getenv("JOOBLE_KEY")
 DB_FILE = "sent_jobs.json"
+
+ADZ_ID = "c6e9389e"
+ADZ_KEY = "3a20349890d291936c53e0ec3e69188e"
 
 def load_sent():
     if os.path.exists(DB_FILE):
@@ -19,46 +23,71 @@ def send_tg(text):
 def search_ovb(sent):
     print("📡 Проверка OVB Stellen...")
     found = []
-    # Ссылка на поиск Sachbearbeiter в Мюльдорфе на OVB
-    url = "https://www.ovbstellen.de/jobs-sachbearbeiter-in-muehldorf-am-inn"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # Ссылка на поиск вакансий в Мюльдорфе
+    url = "https://www.ovbstellen.de/jobs-muehldorf-am-inn"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     try:
         res = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Ищем карточки вакансий (названия классов могут меняться, это базовый поиск)
-        jobs = soup.find_all('div', class_='job-listing') or soup.find_all('article')
-        
-        for j in jobs:
-            title_tag = j.find('h2') or j.find('a')
-            if title_tag:
-                title = title_tag.text.strip()
-                link = title_tag.get('href', '')
-                if not link.startswith('http'): link = "https://www.ovbstellen.de" + link
+        # Находим все карточки вакансий
+        # На OVB обычно это ссылки внутри определенных блоков
+        items = soup.find_all('a', href=True)
+        for item in items:
+            href = item['href']
+            # Фильтруем только ссылки на вакансии (обычно содержат /jobs/)
+            if "/stellenangebot/" in href or "/job/" in href:
+                if not href.startswith('http'):
+                    href = "https://www.ovbstellen.de" + href
                 
-                j_id = f"ovb-{link}" # Используем ссылку как уникальный ID
+                title = item.text.strip()
+                if not title or len(title) < 5: continue
+                
+                j_id = f"ovb-{href}"
                 if j_id not in sent:
-                    msg = f"🏠 <b>OVB Stellen (Local)</b>\n📝 {title}\n📍 Mühldorf am Inn\n🔗 <a href='{link}'>Открыть</a>"
+                    msg = f"🏠 <b>OVB Stellen (Local)</b>\n📝 {title}\n📍 Mühldorf\n🔗 <a href='{href}'>Открыть вакансию</a>"
                     found.append((j_id, msg))
     except Exception as e:
         print(f"❌ Ошибка OVB: {e}")
     return found
 
+def search_adzuna(sent, query, loc, dist):
+    url = f"https://api.adzuna.com/v1/api/jobs/de/search/1"
+    params = {"app_id": ADZ_ID, "app_key": ADZ_KEY, "results_per_page": 5, "what": query, "where": loc, "distance": dist}
+    found = []
+    try:
+        res = requests.get(url, params=params, timeout=10).json()
+        for j in res.get("results", []):
+            j_id = f"adz-{j.get('id')}"
+            if j_id not in sent:
+                msg = f"📌 <b>{query}</b> (Adzuna)\n🏢 {j.get('company', {}).get('display_name')}\n📍 {j.get('location', {}).get('display_name')}\n🔗 <a href='{j.get('redirect_url')}'>Открыть</a>"
+                found.append((j_id, msg))
+    except: pass
+    return found
+
 def main():
     sent = load_sent()
-    # Собираем всё из старых поисков и нового OVB
-    all_found = search_ovb(sent)
+    new_jobs = []
     
-    if all_found:
-        for j_id, msg in all_found[:5]:
+    # 1. Проверяем местный сайт OVB
+    new_jobs.extend(search_ovb(sent))
+    
+    # 2. Проверяем Adzuna (для примера возьмем главные слова)
+    for q in ["Sachbearbeiter", "WordPress"]:
+        new_jobs.extend(search_adzuna(sent, q, "84453", 50))
+
+    if new_jobs:
+        # Отправляем только первые 10, чтобы не спамить
+        for j_id, msg in new_jobs[:10]:
             send_tg(msg)
             sent.add(j_id)
+        
         with open(DB_FILE, "w") as f:
             json.dump(list(sent), f)
+        print(f"✅ Отправлено вакансий: {len(new_jobs)}")
     else:
-        # Оставляем "маячок", чтобы ты видела, что бот работает
-        send_tg("🤖 Проверка завершена. На OVB Stellen и в API пока ничего нового. Дежурю дальше!")
+        send_tg("🤖 Проверка выполнена: новых вакансий на OVB и Adzuna пока нет. Жду следующий запуск!")
 
 if __name__ == "__main__":
     main()
