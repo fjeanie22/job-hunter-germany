@@ -5,7 +5,7 @@ def main():
     # 1. WordPress / Elementor по Баварии
     # Используем полное название страны, чтобы Jooble не путал с Делавэром
     for q in ["WordPress", "Elementor"]:
-        new_jobs.extend(search_jooble(sent, q, "Bayern, Germany"))
+        new_jobs.extend(search_jooble(sent, q, "Bayern, Germany, Deutschland"))
     
     # 2. Офис / Бухгалтерия по Мюльдорфу + 50км
     office_queries = ["Sachbearbeiter", "Büro", "Buchhaltung", "Finanzen"]
