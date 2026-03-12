@@ -23,30 +23,30 @@ def send_tg(text):
 def search_ovb(sent):
     print("📡 Проверка OVB Stellen...")
     found = []
-    # Ссылка на поиск вакансий в Мюльдорфе
-    url = "https://www.ovbstellen.de/jobs-muehldorf-am-inn"
+    # Берем общую страницу региона, там вакансий всегда больше
+    url = "https://www.ovbstellen.de/jobs-landkreis-muehldorf-am-inn"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     try:
         res = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Находим все карточки вакансий
-        # На OVB обычно это ссылки внутри определенных блоков
+        # На OVB вакансии часто лежат в тегах <h3> или <h2> внутри ссылок
         items = soup.find_all('a', href=True)
         for item in items:
             href = item['href']
-            # Фильтруем только ссылки на вакансии (обычно содержат /jobs/)
-            if "/stellenangebot/" in href or "/job/" in href:
+            # Ищем ссылки, которые ведут на конкретные предложения
+            if "/stellenangebot/" in href:
                 if not href.startswith('http'):
                     href = "https://www.ovbstellen.de" + href
                 
-                title = item.text.strip()
-                if not title or len(title) < 5: continue
+                # Извлекаем текст (название вакансии)
+                title = item.get_text(strip=True)
+                if not title or len(title) < 10: continue # Пропускаем короткие обрывки
                 
                 j_id = f"ovb-{href}"
                 if j_id not in sent:
-                    msg = f"🏠 <b>OVB Stellen (Local)</b>\n📝 {title}\n📍 Mühldorf\n🔗 <a href='{href}'>Открыть вакансию</a>"
+                    msg = f"🏠 <b>OVB (Регион)</b>\n📝 {title}\n🔗 <a href='{href}'>Открыть</a>"
                     found.append((j_id, msg))
     except Exception as e:
         print(f"❌ Ошибка OVB: {e}")
