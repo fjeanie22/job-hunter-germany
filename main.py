@@ -1,9 +1,8 @@
 import os, requests, json
-from bs4 import BeautifulSoup
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-JOOBLE_KEY = os.getenv("JOOBLE_KEY") # Убедись, что ключ в Secrets
+JOOBLE_KEY = os.getenv("JOOBLE_KEY")
 DB_FILE = "sent_jobs.json"
 
 def load_sent():
@@ -17,67 +16,59 @@ def send_tg(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
 
-def search_jooble(sent, query, loc):
-    """Jooble обычно дает много результатов по Германии"""
+def search_jooble(sent, query, loc, radius=0):
     if not JOOBLE_KEY: return []
-    print(f"📡 Jooble: {query}...")
+    print(f"📡 Jooble DE: {query} in {loc}...")
     found = []
     try:
         url = f"https://jooble.org/api/{JOOBLE_KEY}"
-        data = {"keywords": query, "location": loc}
+        # Для Jooble важно писать страну, чтобы он не уходил в США
+        data = {"keywords": query, "location": loc, "radius": radius}
         res = requests.post(url, json=data, timeout=15).json()
+        
         for j in res.get("jobs", []):
             j_id = f"jo-{j.get('id')}"
+            location_name = j.get("location", "").lower()
+            
+            # СТРОГИЙ ФИЛЬТР: Только если это не США
+            if any(us_city in location_name for us_city in ["usa", "ca", "ny", "il", "united states"]):
+                continue
+                
             if j_id not in sent:
-                msg = f"💼 <b>Jooble: {query}</b>\n📝 {j.get('title')}\n🏢 {j.get('company', '---')}\n📍 {j.get('location')}\n🔗 <a href='{j.get('link')}'>Link</a>"
+                msg = (f"💼 <b>{query}</b>\n"
+                       f"📝 {j.get('title')}\n"
+                       f"🏢 {j.get('company', '---')}\n"
+                       f"📍 {j.get('location')}\n"
+                       f"🔗 <a href='{j.get('link')}'>Link</a>")
                 found.append((j_id, msg))
-    except: pass
-    return found
-
-def search_arbeitnow(sent):
-    print("📡 Arbeitnow...")
-    found = []
-    try:
-        res = requests.get("https://www.arbeitnow.com/api/job-board-api", timeout=15).json()
-        for j in res.get("data", []):
-            title = j.get("title", "").lower()
-            if any(word in title for word in ["wordpress", "elementor", "remote", "sachbearbeiter"]):
-                j_id = f"an-{j.get('slug')}"
-                if j_id not in sent:
-                    msg = f"🌐 <b>Arbeitnow</b>\n📝 {j.get('title')}\n🏢 {j.get('company_name')}\n🔗 <a href='{j.get('url')}'>Link</a>"
-                    found.append((j_id, msg))
-    except: pass
+    except Exception as e:
+        print(f"Error: {e}")
     return found
 
 def main():
     sent = load_sent()
     new_jobs = []
     
-    # 1. Jooble - СТРОГО ГЕРМАНИЯ
-    # Офис в Мюльдорфе (используем индекс и город для надежности)
-    new_jobs.extend(search_jooble(sent, "Sachbearbeiter", "Mühldorf am Inn, Deutschland"))
-    new_jobs.extend(search_jooble(sent, "Finanzen", "Mühldorf am Inn, Deutschland"))
+    # 1. WordPress / Elementor по Баварии
+    for q in ["WordPress", "Elementor"]:
+        new_jobs.extend(search_jooble(sent, q, "Bayern, DE"))
     
-    # WordPress удаленно - ТЕПЕРЬ С ПОМЕТКОЙ DE
-    new_jobs.extend(search_jooble(sent, "WordPress", "Remote, Deutschland"))
-    new_jobs.extend(search_jooble(sent, "Elementor", "Remote, Deutschland"))
-    
-    # 2. Arbeitnow (он и так немецкий, там все ок)
-    new_jobs.extend(search_arbeitnow(sent))
+    # 2. Офис / Бухгалтерия по Мюльдорфу + 50км
+    office_queries = ["Sachbearbeiter", "Büro", "Buchhaltung", "Finanzen"]
+    for q in office_queries:
+        new_jobs.extend(search_jooble(sent, q, "84453, DE", radius=50))
 
     if new_jobs:
-        # Фильтруем на всякий случай, чтобы в заголовок не пролезла Америка
-        # (если в локации есть USA или United States - пропускаем)
-        for j_id, msg in new_jobs[:15]:
-            if "USA" in msg or "Chicago" in msg or "NY" in msg: 
-                continue
+        # Отправляем максимум 20 за раз
+        for j_id, msg in new_jobs[:20]:
             send_tg(msg)
             sent.add(j_id)
         
         with open(DB_FILE, "w") as f:
             json.dump(list(sent), f)
+        print(f"Найдено: {len(new_jobs)}")
     else:
-        print("Новых вакансий в Германии не найдено.")
+        send_tg("🤖 Проверка DE: По твоим запросам в Баварии новых вакансий за последний час не появилось. Дежурю дальше!")
 
 if __name__ == "__main__":
     main()
