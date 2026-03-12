@@ -99,7 +99,7 @@ def main():
 
     if new_jobs:
         # Отправляем максимум 15 новых, чтобы не заспамить
-        for j_id, msg in new_jobs[:15]: 
+        for j_id, msg in new_jobs[:50]: 
             send_tg(msg)
             sent.add(j_id)
         
