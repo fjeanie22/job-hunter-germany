@@ -53,26 +53,31 @@ def main():
     sent = load_sent()
     new_jobs = []
     
-    # 1. Ищем через Jooble (он мощный)
-    # Офис в Мюльдорфе
-    new_jobs.extend(search_jooble(sent, "Sachbearbeiter", "Mühldorf am Inn"))
-    # WordPress удаленно
-    new_jobs.extend(search_jooble(sent, "WordPress", "Remote"))
+    # 1. Jooble - СТРОГО ГЕРМАНИЯ
+    # Офис в Мюльдорфе (используем индекс и город для надежности)
+    new_jobs.extend(search_jooble(sent, "Sachbearbeiter", "Mühldorf am Inn, Deutschland"))
+    new_jobs.extend(search_jooble(sent, "Finanzen", "Mühldorf am Inn, Deutschland"))
     
-    # 2. Ищем через Arbeitnow (уже проверено, работает)
+    # WordPress удаленно - ТЕПЕРЬ С ПОМЕТКОЙ DE
+    new_jobs.extend(search_jooble(sent, "WordPress", "Remote, Deutschland"))
+    new_jobs.extend(search_jooble(sent, "Elementor", "Remote, Deutschland"))
+    
+    # 2. Arbeitnow (он и так немецкий, там все ок)
     new_jobs.extend(search_arbeitnow(sent))
 
     if new_jobs:
-        # Берем топ-15
+        # Фильтруем на всякий случай, чтобы в заголовок не пролезла Америка
+        # (если в локации есть USA или United States - пропускаем)
         for j_id, msg in new_jobs[:15]:
+            if "USA" in msg or "Chicago" in msg or "NY" in msg: 
+                continue
             send_tg(msg)
             sent.add(j_id)
+        
         with open(DB_FILE, "w") as f:
             json.dump(list(sent), f)
-        print(f"Найдено: {len(new_jobs)}")
     else:
-        # Сообщение о дежурстве без лишнего шума
-        print("Ничего нового.")
+        print("Новых вакансий в Германии не найдено.")
 
 if __name__ == "__main__":
     main()
